@@ -1,0 +1,5 @@
+data/raw/
+registry/model_state.json
+__pycache__/
+.pytest_cache/
+*.pyc
