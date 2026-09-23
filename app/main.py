@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+from app.model_registry import ModelRegistry
 
 from fastapi import FastAPI, HTTPException, status
 
@@ -7,8 +8,26 @@ from app.model_service import ModelService
 from app.schemas import PredictionRequest, PredictionResponse
 
 
+PROJECT_ROOT = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+)
+
+
+registry = ModelRegistry(
+    models_dir=PROJECT_ROOT / "models",
+    state_path=(
+        PROJECT_ROOT
+        / "registry"
+        / "model_state.json"
+    ),
+)
+
+
 model_service = ModelService(
-    model_path=Path("models/rul_model_v1.joblib"),
+    model_path=registry.get_active_model_path()
 )
 
 
@@ -89,3 +108,124 @@ def predict(request: PredictionRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(exc)}",
         )
+
+@app.get("/models")
+def list_models():
+    return {
+        "models": registry.list_models()
+    }
+
+@app.get("/models/active")
+def get_active_model():
+    return {
+        "active_version": (
+            registry.get_active_version()
+        ),
+        "previous_version": (
+            registry.get_previous_version()
+        ),
+    }
+
+@app.post(
+    "/models/{version}/activate"
+)
+def activate_model(version: str):
+
+    try:
+        model_path = registry.get_model_path(
+            version
+        )
+
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+    # Load candidate before changing registry state.
+    model_service.load_model(
+        model_path
+    )
+
+    if (
+        not model_service.is_ready
+        or model_service.model_version
+        != version
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Candidate model could not "
+                "be loaded safely."
+            ),
+        )
+
+    state = registry.activate(
+        version
+    )
+
+    return {
+        "status": "activated",
+        "active_version": state[
+            "active_version"
+        ],
+        "previous_version": state[
+            "previous_version"
+        ],
+    }
+
+@app.post("/models/rollback")
+def rollback_model():
+
+    previous_version = (
+        registry.get_previous_version()
+    )
+
+    if previous_version is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No previous model version "
+                "available for rollback."
+            ),
+        )
+
+    try:
+        model_path = registry.get_model_path(
+            previous_version
+        )
+
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+    model_service.load_model(
+        model_path
+    )
+
+    if (
+        not model_service.is_ready
+        or model_service.model_version
+        != previous_version
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Rollback model could not "
+                "be loaded safely."
+            ),
+        )
+
+    state = registry.rollback()
+
+    return {
+        "status": "rollback_successful",
+        "active_version": state[
+            "active_version"
+        ],
+        "previous_version": state[
+            "previous_version"
+        ],
+    }

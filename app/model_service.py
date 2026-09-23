@@ -17,7 +17,12 @@ class ModelService:
 
         self.load_error = None
 
-    def load_model(self) -> None:
+    def load_model(
+        self,
+        model_path: Path | None = None,
+    ) -> None:
+        if model_path is not None:
+            self.model_path = model_path
         try:
             artifact = joblib.load(self.model_path)
 
