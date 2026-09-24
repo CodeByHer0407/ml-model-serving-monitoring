@@ -319,7 +319,7 @@ def rollback_model():
 
 @app.get(
     "/metrics",
-    include_in_schema=True,
+    include_in_schema=False,
 )
 def metrics():
     return Response(
