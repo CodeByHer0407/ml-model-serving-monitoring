@@ -1,16 +1,16 @@
 # ML Model Serving & Monitoring Platform
 
-A production-style machine learning serving platform for versioned model inference, runtime model activation and rollback, observability, automated validation, and containerized deployment.
+A production-style machine learning serving platform for **versioned model inference, runtime model activation and rollback, observability, automated testing, containerized deployment, and CI security checks**.
 
-The platform serves LightGBM Remaining Useful Life (RUL) models trained on the NASA C-MAPSS FD001 turbofan engine degradation dataset. It demonstrates how multiple ML model versions can be registered, switched at runtime, monitored, and rolled back without restarting the API.
+The platform serves LightGBM Remaining Useful Life (RUL) models trained on the **NASA C-MAPSS FD001 turbofan engine degradation dataset**. It demonstrates how multiple ML model versions can be registered, switched at runtime, monitored, rolled back, tested, containerized, and validated through CI.
 
 ---
 
 ## Key Features
 
 - FastAPI-based ML inference service
-- Versioned LightGBM model artifacts
-- Runtime model activation
+- Two versioned LightGBM model artifacts: **V1** and **V2**
+- Runtime model activation without restarting the API
 - Rollback to the previously active model
 - Model metadata and feature-schema validation
 - Health and readiness endpoints
@@ -19,12 +19,16 @@ The platform serves LightGBM Remaining Useful Life (RUL) models trained on the N
   - HTTP request counts
   - HTTP request duration
   - Prediction counts by model version
-  - Model inference latency
-- Grafana dashboard for operational monitoring
+  - Model inference latency by model version
+- Grafana dashboard for model-serving observability
+- Automatic Grafana datasource and dashboard provisioning
 - Dockerized FastAPI application
 - Full FastAPI + Prometheus + Grafana stack using Docker Compose
-- Automated unit and integration tests
-- Reproducible local deployment with a single Docker Compose command
+- 9 automated tests covering serving, validation, lifecycle management, and metrics
+- GitHub Actions CI
+- Automated Docker image build validation
+- SBOM generation
+- Container vulnerability scanning
 
 ---
 
@@ -55,15 +59,27 @@ The platform serves LightGBM Remaining Useful Life (RUL) models trained on the N
           │     LightGBM     │          │    Dashboard     │
           │    Inference     │          └──────────────────┘
           └──────────────────┘
+
+                         GitHub Push / PR
+                                   │
+                                   ▼
+                         ┌────────────────────┐
+                         │   GitHub Actions   │
+                         └─────────┬──────────┘
+                                   │
+                ┌──────────────────┼──────────────────┐
+                ▼                  ▼                  ▼
+           Run Tests         Docker Build       Security Scan
+                                                   │
+                                                   ├── SBOM
+                                                   └── Vulnerabilities
 ```
 
 ---
 
 ## Model Lifecycle
 
-The platform supports multiple versioned model artifacts and keeps track of both the active model and the previously active model.
-
-Example lifecycle:
+The platform supports multiple versioned model artifacts and tracks both the active model and the previously active model.
 
 ```text
 V1 active
@@ -81,13 +97,15 @@ Rollback
 V1 active again
 ```
 
+A candidate model is loaded and validated before the registry state is updated. This prevents an invalid model artifact from being marked active.
+
 Model switching happens at runtime without rebuilding or restarting the API.
 
 ---
 
 ## Model Versions
 
-Both models use the same 18-feature inference contract.
+Both models use the same **18-feature inference contract**.
 
 ### Model V1
 
@@ -111,7 +129,7 @@ num_leaves = 31
 random_state = 42
 ```
 
-V2 is an independently trained candidate version used to demonstrate model lifecycle management. It is not presented as inherently better than V1 without a separate model-quality comparison.
+V2 is an independently trained candidate model used to demonstrate lifecycle management. It is not presented as inherently better than V1 without a separate model-quality comparison.
 
 ---
 
@@ -140,9 +158,9 @@ sensor_20
 sensor_21
 ```
 
-The serving layer reconstructs the request in the feature order stored inside the selected model artifact before inference.
+The serving layer reconstructs requests in the feature order stored inside the selected model artifact before inference.
 
-Additional validation includes:
+Validation includes:
 
 - exact feature-schema enforcement
 - numeric input validation
@@ -156,13 +174,13 @@ Additional validation includes:
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Checks whether the API process is running |
-| `GET` | `/ready` | Checks whether the ML model is loaded and ready |
+| `GET` | `/ready` | Checks whether a valid ML model is loaded and ready |
 | `POST` | `/predict` | Generates a Remaining Useful Life prediction |
 | `GET` | `/models` | Lists registered model versions |
 | `GET` | `/models/active` | Returns the active and previous model versions |
 | `POST` | `/models/{version}/activate` | Activates a selected model version |
 | `POST` | `/models/rollback` | Rolls back to the previously active model |
-| `GET` | `/metrics` | Exposes Prometheus-compatible metrics |
+| `GET` | `/metrics` | Exposes Prometheus-compatible application metrics |
 
 Interactive Swagger documentation:
 
@@ -205,7 +223,7 @@ http://localhost:8000/ready
 }
 ```
 
-### Example response
+### Example Response
 
 ```json
 {
@@ -214,6 +232,8 @@ http://localhost:8000/ready
   "unit": "cycles"
 }
 ```
+
+The response reports the model version that served the request, which makes it possible to trace predictions across model activations and rollbacks.
 
 ---
 
@@ -234,7 +254,7 @@ model_predictions_total
 model_prediction_duration_seconds
 ```
 
-Prediction metrics include the active model version as a label, allowing V1 and V2 traffic and latency to be monitored independently.
+Prediction metrics include `model_version` labels, allowing V1 and V2 traffic and latency to be monitored independently.
 
 ### Prometheus
 
@@ -242,30 +262,40 @@ Prediction metrics include the active model version as a label, allowing V1 and 
 http://localhost:9090
 ```
 
+Prometheus scrapes the FastAPI service from the internal Docker Compose network.
+
 ### Grafana
 
 ```text
 http://localhost:3000
 ```
 
-The Grafana dashboard currently includes:
+The dashboard includes:
 
-- HTTP request rate
-- Prediction traffic by model version
-- Average inference latency by model version
-- HTTP error rate
+- **Predictions by Model Version**
+- **Average Inference Latency by Model Version**
+- **HTTP Request Rate**
+- **HTTP Error Rate**
+
+The Prometheus datasource and Grafana dashboard are provisioned automatically from files stored in the repository, so a fresh Docker Compose deployment recreates the monitoring setup without manual dashboard import.
+
+### Grafana Dashboard
+
+The final validation run demonstrates traffic for both V1 and V2, per-version inference latency, API request activity, and a deliberately generated `404` used to verify HTTP error monitoring.
+
+![Grafana Monitoring Dashboard](docs/images/grafana-dashboard.png)
 
 ---
 
-## Running with Docker
+## Quick Start with Docker
 
-The full stack can be started with:
+### 1. Start the complete stack
 
 ```bash
 docker compose up --build -d
 ```
 
-Check container status:
+### 2. Check running containers
 
 ```bash
 docker compose ps
@@ -273,21 +303,37 @@ docker compose ps
 
 Expected services:
 
-| Service | Port |
-|---|---:|
-| FastAPI | `8000` |
-| Prometheus | `9090` |
-| Grafana | `3000` |
+| Service | Port | Purpose |
+|---|---:|---|
+| FastAPI | `8000` | ML inference and model lifecycle API |
+| Prometheus | `9090` | Metrics collection |
+| Grafana | `3000` | Monitoring dashboards |
 
-Stop the stack with:
+### 3. Open the services
+
+```text
+FastAPI Swagger UI: http://localhost:8000/docs
+Prometheus:          http://localhost:9090
+Grafana:             http://localhost:3000
+```
+
+### 4. Stop the stack
 
 ```bash
 docker compose down
 ```
 
+To also remove the Grafana data volume:
+
+```bash
+docker compose down -v
+```
+
+The Grafana datasource and dashboard will be recreated automatically the next time the stack starts.
+
 ---
 
-## Running Locally
+## Running the API Locally
 
 Create or activate a Python 3.11 environment.
 
@@ -319,19 +365,19 @@ Run the full test suite:
 pytest -v
 ```
 
-Current automated tests cover:
+The automated tests cover:
 
 - API health
 - model readiness
-- real model inference
+- real LightGBM inference
 - missing feature validation
 - unexpected feature validation
-- invalid cycle validation
+- invalid `cycle` validation
 - model activation
 - model rollback
-- Prometheus metrics endpoint
+- Prometheus metrics exposure
 
-Current status:
+Verified status:
 
 ```text
 9 tests passed
@@ -339,10 +385,64 @@ Current status:
 
 ---
 
+## CI/CD & Security
+
+GitHub Actions validates the project on pushes and pull requests to `main`.
+
+The pipeline performs:
+
+```text
+Run Tests
+   │
+   ▼
+Build Docker Image
+   │
+   ▼
+Generate SBOM
+   │
+   ▼
+Vulnerability Scan
+```
+
+The workflow includes:
+
+- Python environment setup
+- dependency installation
+- automated test execution
+- Docker image build validation
+- SBOM generation
+- container vulnerability scanning
+
+The SBOM and vulnerability scan use Anchore tooling.
+
+The current vulnerability scan reports high-severity findings without blocking the build. This keeps security findings visible while maintaining a usable CI baseline for the project.
+
+---
+
+## Reproducible Grafana Provisioning
+
+Grafana is configured entirely through files stored in the repository.
+
+The project provisions:
+
+```text
+monitoring/grafana/provisioning/datasources/prometheus.yml
+monitoring/grafana/provisioning/dashboards/dashboards.yml
+monitoring/grafana/dashboards/ml-serving-dashboard.json
+```
+
+This was validated by removing the existing Grafana Docker volume and recreating the complete stack. The dashboard and Prometheus datasource were restored automatically from repository configuration.
+
+---
+
 ## Project Structure
 
 ```text
 ml-model-serving-monitoring/
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 │
 ├── app/
 │   ├── __init__.py
@@ -352,12 +452,24 @@ ml-model-serving-monitoring/
 │   ├── model_service.py
 │   └── schemas.py
 │
+├── docs/
+│   └── images/
+│       └── grafana-dashboard.png
+│
 ├── models/
 │   ├── rul_model_v1.joblib
 │   └── rul_model_v2.joblib
 │
 ├── monitoring/
-│   └── prometheus.yml
+│   ├── prometheus.yml
+│   └── grafana/
+│       ├── dashboards/
+│       │   └── ml-serving-dashboard.json
+│       └── provisioning/
+│           ├── dashboards/
+│           │   └── dashboards.yml
+│           └── datasources/
+│               └── prometheus.yml
 │
 ├── scripts/
 │   └── train_v2.py
@@ -372,12 +484,12 @@ ml-model-serving-monitoring/
 │   ├── test_prediction.py
 │   └── test_readiness.py
 │
+├── .dockerignore
+├── .gitignore
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
 ├── requirements-dev.txt
-├── .dockerignore
-├── .gitignore
 └── README.md
 ```
 
@@ -415,15 +527,21 @@ ml-model-serving-monitoring/
 - Pytest
 - FastAPI TestClient
 
+### CI/CD & Security
+
+- GitHub Actions
+- Anchore SBOM Action
+- Anchore vulnerability scanning
+
 ---
 
 ## Dataset
 
-The demonstration models use the NASA C-MAPSS FD001 turbofan engine degradation dataset.
+The demonstration models use the **NASA C-MAPSS FD001 turbofan engine degradation dataset**.
 
 The raw training dataset is intentionally not stored in this repository.
 
-The serialized model artifacts contain the metadata and feature schema required for inference.
+The serialized model artifacts contain the metadata and feature schema required by the inference service.
 
 ---
 
@@ -431,55 +549,105 @@ The serialized model artifacts contain the metadata and feature schema required 
 
 ### Why keep V1 and V2 under the same feature contract?
 
-The platform reuses the feature schema stored in V1 when training V2. This ensures that model versions remain interchangeable at serving time and prevents accidental schema drift between versions.
+V2 is trained using the feature schema stored in V1. This keeps model versions interchangeable at serving time and prevents accidental schema drift between versions.
 
 ### Why separate `/health` and `/ready`?
 
 `/health` verifies that the API process is alive.
 
-`/ready` verifies that a valid model artifact has been loaded and the service is ready to perform inference.
+`/ready` verifies that a valid model artifact is loaded and the service is ready to perform inference.
 
-### Why load the candidate model before changing registry state?
+### Why validate a candidate model before activation?
 
-A newly selected model is validated and loaded first. The registry state is updated only after the candidate model is confirmed usable, reducing the risk of marking a broken model version as active.
+A newly selected model is loaded and validated before the registry state changes. This reduces the risk of marking a broken or incompatible model artifact as active.
 
-### Why keep the Grafana dashboard separate from the API?
+### Why separate monitoring from the API?
 
-Prometheus and Grafana are operational components, while FastAPI remains focused on serving inference and exposing metrics. Docker Compose connects the three services into a reproducible local stack.
+FastAPI focuses on model serving and metrics exposure. Prometheus collects those metrics, while Grafana handles visualization. Docker Compose connects the services while keeping their responsibilities separate.
+
+### Why provision Grafana from files?
+
+A manually configured dashboard only exists in a local Grafana database or Docker volume. File-based provisioning makes the dashboard and datasource reproducible for anyone cloning the repository.
+
+### Why keep the security scan non-blocking?
+
+The current CI pipeline reports high-severity vulnerabilities without failing the entire workflow. This creates visibility into container risk while keeping the initial security baseline observable and actionable.
+
+---
+
+## Verified End-to-End Flow
+
+The project has been validated through the following lifecycle:
+
+```text
+Start Docker Compose stack
+        │
+        ▼
+V1 model loaded and ready
+        │
+        ▼
+Serve V1 prediction
+        │
+        ▼
+Activate V2 at runtime
+        │
+        ▼
+Serve V2 prediction
+        │
+        ▼
+Rollback
+        │
+        ▼
+Serve V1 prediction again
+        │
+        ▼
+Prometheus captures metrics
+        │
+        ▼
+Grafana visualizes V1/V2 traffic,
+latency, request rate, and HTTP errors
+```
+
+A clean test run completes successfully with all **9 tests passing**.
 
 ---
 
 ## Future Improvements
 
-Planned improvements include:
+Potential extensions include:
 
-- GitHub Actions CI
-- automated Docker image build validation
-- SBOM generation
-- container vulnerability scanning
-- model-quality comparison before promotion
+- model-quality comparison gates before promotion
 - data and feature drift detection
-- automated promotion policies
+- automated model promotion policies
 - authentication and authorization for model-management endpoints
 - persistent external model registry
-- automated Grafana dashboard provisioning
+- cloud deployment
+- stricter CI security gates after vulnerability remediation
+
+These are intentionally left as future extensions rather than requirements for the current portfolio version.
 
 ---
 
-## Status
-
-The current implementation supports:
+## Project Status
 
 ```text
-Real model inference          ✅
-V1 / V2 model versions       ✅
-Runtime activation           ✅
-Rollback                     ✅
-Health / readiness checks    ✅
-Prometheus metrics           ✅
-Grafana monitoring           ✅
-Docker Compose deployment    ✅
-Automated tests              ✅
+Real model inference             ✅
+V1 / V2 model versions          ✅
+Runtime model activation        ✅
+Rollback                        ✅
+Health / readiness checks       ✅
+Input and schema validation     ✅
+Prometheus metrics              ✅
+Grafana monitoring              ✅
+Grafana auto-provisioning       ✅
+Dockerized API                  ✅
+Docker Compose deployment       ✅
+Automated tests                 ✅
+GitHub Actions CI               ✅
+Docker build validation         ✅
+SBOM generation                 ✅
+Vulnerability scanning          ✅
+Clean end-to-end validation     ✅
 ```
 
-CI/CD and security scanning are the next planned implementation steps.
+The core project is complete. Remaining work is limited to portfolio presentation and resume integration.
